@@ -1,10 +1,10 @@
 # GMAT_RL_Docking_Project/physics_config.py
-#
+#SAIIIIIAJFNESKJN
 # COORDINATE CONVENTION: docking_env.py's (x, y) state is measured relative
 # to the BAS docking port, which is the origin (0, 0) by definition.
-# docking_port_offset_m below is ONLY for drawing the BAS hull relative to
+# docking_port_offset_m below is (YES) ONLY for drawing the BAS hull relative to
 # that same origin (hull center is at -docking_port_offset_m along the
-# station's long axis). Any renderer must read this value rather than
+# station's long axis). Any renderer must read this value rather than ( WE CAN CHANFGE IT)
 # hardcoding its own offset — that mismatch was the root cause of the
 # "AI thinks it's docking at (0,0) but the hull is drawn 14m over" bug.
 
