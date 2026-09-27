@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BAS Mission Control — Launch to Docking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#03060a; --panel-bg:rgba(7,15,22,0.86);
+    --panel-border:rgba(64,212,196,0.30); --panel-border-dim:rgba(64,212,196,0.14);
+    --accent:#3ee0c8; --accent-bright:#9df7ea; --text:#e8f3f1; --text-dim:#7c96a0;
+    --warn:#ffb454; --danger:#ff5f56; --success:#3ddc84;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);font-family:'IBM Plex Mono',monospace;color:var(--text);}
+  canvas{display:block;position:absolute;inset:0;}
+  .hud{position:absolute;background:var(--panel-bg);border:1px solid var(--panel-border);border-top:2px solid var(--accent);
+       padding:10px 14px 12px;backdrop-filter:blur(2px);font-size:12px;line-height:1.55;}
+  .hud h3{margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.12em;color:var(--accent-bright);
+          border-bottom:1px solid var(--panel-border-dim);padding-bottom:6px;}
+  .row{display:flex;justify-content:space-between;gap:14px;margin:2px 0;}
+  .label{color:var(--text-dim);}
+  .val{color:#fff;font-weight:600;}
+  .val.warn{color:var(--warn);} .val.danger{color:var(--danger);} .val.ok{color:var(--success);}
+
+  #telemetry{top:16px;left:16px;width:238px;}
+  #corridor{top:16px;right:16px;width:220px;}
+  #playback{bottom:16px;left:16px;width:340px;}
+  #log{bottom:16px;right:16px;width:300px;height:190px;display:flex;flex-direction:column;}
+  #met{top:16px;left:50%;transform:translateX(-50%);width:220px;text-align:center;}
+  #rlstatus{bottom:222px;right:16px;width:300px;}
+
+  .status-line{margin-top:8px;padding-top:8px;border-top:1px solid var(--panel-border-dim);font-weight:600;letter-spacing:0.05em;}
+  .pill{display:inline-block;padding:2px 8px;font-size:10px;letter-spacing:0.08em;border:1px solid var(--panel-border-dim);}
+  .pill.replay{background:rgba(62,224,200,0.10);color:var(--accent-bright);}
+  .pill.docked{background:rgba(61,220,132,0.12);color:var(--success);border-color:rgba(61,220,132,0.4);}
+  .pill.fail{background:rgba(255,95,86,0.12);color:var(--danger);border-color:rgba(255,95,86,0.4);}
+  .pill.trunc{background:rgba(255,180,84,0.12);color:var(--warn);border-color:rgba(255,180,84,0.4);}
+  .pill.scripted{background:rgba(212,175,55,0.14);color:#f2d789;border-color:rgba(212,175,55,0.45);}
+
+  .btn{background:rgba(62,224,200,0.10);border:1px solid var(--panel-border);color:var(--accent-bright);
+       font-family:inherit;font-size:11px;padding:5px 10px;cursor:pointer;letter-spacing:0.05em;}
+  .btn:hover{background:rgba(62,224,200,0.2);}
+  .btn.active{background:var(--accent);color:#03181a;}
+  .btnrow{display:flex;gap:6px;margin:8px 0;}
+  input[type=range]{width:100%;accent-color:var(--accent);}
+  #frame-counter{font-size:10px;color:var(--text-dim);text-align:right;margin-top:2px;}
+
+  #log-entries{flex:1;overflow-y:auto;font-size:11px;padding-right:2px;}
+  #log-entries::-webkit-scrollbar{width:5px;}
+  #log-entries::-webkit-scrollbar-thumb{background:var(--panel-border);}
+  .log-entry{margin:3px 0;}
+  .log-entry .t{color:var(--text-dim);margin-right:6px;}
+  .log-entry.info{color:var(--text);} .log-entry.warn{color:var(--warn);}
+  .log-entry.danger{color:var(--danger);} .log-entry.success{color:var(--success);}
+
+  #met .clock{font-size:18px;font-weight:600;color:var(--accent-bright);letter-spacing:0.06em;}
+  #met .sub{font-size:10px;color:var(--text-dim);margin-top:2px;}
+
+  #loadmsg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+           text-align:center;color:var(--text-dim);font-size:13px;}
+  #loadmsg .btn{margin-top:10px;}
+
+  /* Hidden easter-egg banner — only shown once 'sai' is typed. */
+  #egg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;
+       color:#f2d789;font-size:15px;letter-spacing:0.18em;font-weight:600;display:none;
+       text-shadow:0 0 18px rgba(212,175,55,0.5);}
+  #egg .sub{font-size:11px;letter-spacing:0.06em;color:var(--text-dim);margin-top:6px;text-shadow:none;}
+  #phasebar{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);width:420px;display:none;}
+  .phase{display:flex;justify-content:space-between;font-size:10px;letter-spacing:0.08em;margin-top:6px;}
+  .phase span{padding:3px 8px;border:1px solid var(--panel-border-dim);color:var(--text-dim);}
+  .phase span.on{background:rgba(212,175,55,0.16);color:#f2d789;border-color:rgba(212,175,55,0.45);}
+
+  @media (max-width:900px){ #corridor,#rlstatus{display:none;} }
+</style>
+
+<style>
+  /* --- Phase 1 (launch/transfer) additions, same visual language as the
+     docking HUD so the two phases feel like one app, not a bolted-on demo. --- */
+  #phase1{position:absolute;inset:0;}
+  #phase3wrapper{position:absolute;inset:0;display:none;opacity:0;transition:opacity 0.6s ease;}
+  #phase3wrapper.in{opacity:1;}
+  #phase1.out{opacity:0;pointer-events:none;transition:opacity 0.6s ease;}
+
+  #mission-timeline{top:16px;left:16px;width:300px;}
+  #launch-telemetry{top:16px;right:16px;width:230px;text-align:right;}
+  #launch-controls{bottom:16px;left:16px;width:300px;}
+  #launch-controls .btn{margin-bottom:6px;}
+  #launch-controls .btn:disabled{opacity:0.35;cursor:not-allowed;}
+  #launch-controls .btn:disabled:hover{background:rgba(62,224,200,0.10);}
+
+  .tl-step{display:flex;gap:8px;margin:5px 0;font-size:11px;color:var(--text-dim);}
+  .tl-step.done{color:var(--accent-bright);}
+  .tl-step.active{color:#fff;font-weight:600;}
+  .tl-dot{width:7px;height:7px;border-radius:50%;background:var(--panel-border-dim);flex:none;margin-top:3px;}
+  .tl-step.done .tl-dot{background:var(--success);}
+  .tl-step.active .tl-dot{background:var(--warn);box-shadow:0 0 6px var(--warn);}
+
+  #phase-banner{position:absolute;top:16px;left:50%;transform:translateX(-50%);
+    font-size:11px;letter-spacing:0.14em;color:var(--accent-bright);
+    background:var(--panel-bg);border:1px solid var(--panel-border);padding:6px 14px;}
+</style>
+
+</head>
+<body>
+
+
+<div id="phase-banner">MISSION PROFILE: SRIHARIKOTA &rarr; LEO &rarr; TRANSFER &rarr; BAS RENDEZVOUS &rarr; PROXIMITY OPS</div>
+
+<div id="phase1">
+  <canvas id="launchCanvas"></canvas>
+
+  <div id="mission-timeline" class="hud">
+    <h3>MISSION TIMELINE</h3>
+    <div class="tl-step" data-step="prelaunch"><div class="tl-dot"></div><div>Pre-launch — vehicle on pad, BAS orbit locked</div></div>
+    <div class="tl-step" data-step="ascent"><div class="tl-dot"></div><div>Ascent — liftoff through MECO / stage sep</div></div>
+    <div class="tl-step" data-step="insertion"><div class="tl-dot"></div><div>LEO insertion — parking orbit achieved</div></div>
+    <div class="tl-step" data-step="transfer"><div class="tl-dot"></div><div>Transfer burn — closing on BAS orbital plane</div></div>
+    <div class="tl-step" data-step="rendezvous"><div class="tl-dot"></div><div>Rendezvous — range under 2,000 m</div></div>
+    <div class="tl-step" data-step="proximity"><div class="tl-dot"></div><div>Proximity ops handoff — CW relative-motion frame</div></div>
+  </div>
+
+  <div id="launch-telemetry" class="hud">
+    <h3>VEHICLE — SAI</h3>
+    <div class="row"><span class="label">Phase</span><span class="val" id="lt-phase">PRE-LAUNCH</span></div>
+    <div class="row"><span class="label">Altitude</span><span class="val" id="lt-alt">0 km</span></div>
+    <div class="row"><span class="label">Range to BAS</span><span class="val" id="lt-range">—</span></div>
+    <div class="row"><span class="label">MET</span><span class="val" id="lt-met">T+00:00:00</span></div>
+    <div class="row" style="margin-top:8px;color:var(--text-dim);font-size:10px;">
+      Illustrative trajectory (parametric), not GMAT-propagated.<br>Proximity-ops physics (CW dynamics) is exact.
+    </div>
+  </div>
+
+  <div id="launch-controls" class="hud">
+    <h3>LAUNCH SEQUENCER</h3>
+    <button class="btn" id="btn-launch">&#9650; Begin Launch Sequence</button>
+    <button class="btn" id="btn-proximity" disabled>&#9654; Begin Proximity Operations</button>
+    <button class="btn" id="btn-skip">&#9193; Skip to Proximity Ops</button>
+  </div>
+</div>
+
+<div id="phase3wrapper">
+<canvas id="dockCanvas"></canvas>
+<div id="loadmsg"></div>
+<div id="egg">SAI MANUAL OVERRIDE — SCRIPTED DOCKING<div class="sub">no RL policy · closed-loop guidance law</div></div>
+
+<div id="met" class="hud" style="display:none;">
+  <div class="clock" id="met-clock">00:00:00</div>
+  <div class="sub" id="met-sub">RECORDED FLIGHT — PLAYBACK</div>
+</div>
+
+<div id="telemetry" class="hud" style="display:none;">
+  <h3>CHASER TELEMETRY — SAI</h3>
+  <div class="row"><span class="label">Range</span><span class="val" id="val-range">—</span></div>
+  <div class="row"><span class="label">Closing rate</span><span class="val" id="val-vel">—</span></div>
+  <div class="row"><span class="label">Lateral offset</span><span class="val" id="val-lat">—</span></div>
+  <div class="row"><span class="label">Attitude</span><span class="val" id="val-att">—</span></div>
+  <div class="row"><span class="label">RCS fuel</span><span class="val" id="val-fuel">—</span></div>
+  <div class="row"><span class="label">Action</span><span class="val" id="val-action">—</span></div>
+  <div class="status-line" id="val-status">—</div>
+</div>
+
+<div id="corridor" class="hud" style="display:none;">
+  <h3>DOCKING CONSTRAINTS</h3>
+  <div class="row"><span class="label">Closing ≤</span><span>0.10 m/s</span></div>
+  <div class="row"><span class="label">Lateral ≤</span><span>0.15 m</span></div>
+  <div class="row"><span class="label">Misalign ≤</span><span>5.0°</span></div>
+  <div class="row"><span class="label">Hold point</span><span>X = −5.00 m</span></div>
+  <div class="row" style="margin-top:8px;color:var(--text-dim);font-size:10px;">CW target: BAS port, origin of this frame</div>
+</div>
+
+<div id="rlstatus" class="hud" style="display:none;">
+  <h3>RL AGENT</h3>
+  <div class="row"><span class="label">Mode</span><span class="pill replay" id="rl-mode">REPLAY — TRAINED POLICY</span></div>
+  <div class="row" style="margin-top:6px;"><span class="label">Recorded</span><span class="val" id="rl-recorded" style="font-weight:400;">—</span></div>
+  <div class="row"><span class="label">Episode length</span><span class="val" id="rl-length" style="font-weight:400;">—</span></div>
+  <div class="row"><span class="label">Cumulative reward</span><span class="val" id="rl-reward" style="font-weight:400;">—</span></div>
+  <div class="row"><span class="label">Outcome</span><span id="rl-outcome" class="pill">—</span></div>
+</div>
+
+<div id="playback" class="hud" style="display:none;">
+  <h3>PLAYBACK</h3>
+  <div class="btnrow">
+    <button class="btn" id="btn-play">▶ Play</button>
+    <button class="btn" id="btn-restart">⟲ Restart</button>
+  </div>
+  <input type="range" id="scrub" min="0" max="0" value="0" step="1">
+  <div id="frame-counter">frame 0 / 0</div>
+  <div class="btnrow" style="margin-top:10px;">
+    <span class="label" style="align-self:center;font-size:10px;">Speed</span>
+    <button class="btn speed" data-speed="1">1x</button>
+    <button class="btn speed active" data-speed="4">4x</button>
+    <button class="btn speed" data-speed="10">10x</button>
+    <button class="btn speed" data-speed="25">25x</button>
+  </div>
+</div>
+
+<div id="phasebar" class="hud">
+  <h3>SCRIPTED GUIDANCE — SEQUENTIAL PHASES</h3>
+  <div class="phase">
+    <span id="ph1">1 · ALIGN θ → 0°</span>
+    <span id="ph2">2 · CENTRE Y → 0 m</span>
+    <span id="ph3">3 · APPROACH X → −5 m</span>
+  </div>
+</div>
+
+<!-- shared #log panel hoisted to top level, see below -->
+
+
+</div>
+
+
+<!-- shared system log, visible across both phases -->
+<div id="log" class="hud" >
+  <h3>SYSTEM LOG</h3>
+  <div id="log-entries"></div>
+</div>
+
+
+<script>
+const canvas = document.getElementById('dockCanvas');
+const ctx = canvas.getContext('2d');
+function resize(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+const MAX_LAT = 0.15, MAX_VEL = 0.10, MAX_MISALIGN = 5.0;
+const HOLD_X = -5.0, HOLD_Y = 0.0;
+
+let frames = [], frameIdx = 0, playing = false, speed = 4, generatedAt = null;
+let acc = 0, lastT = performance.now();
+let visualAngle = null, lastRenderedIdx = 0;
+let scriptedMode = false;
+
+// ---------------------------------------------------------------------
+// FIX: action decoding for MultiDiscrete([3,3,3]).
+// docking_env.py's action space is now three independent channels
+// [X-thrust, Y-thrust, Rotation], each 0=off / 1=positive / 2=negative,
+// fired SIMULTANEOUSLY. The old ACTION_NAMES table mapped a single
+// scalar 0..7 (the long-dead Discrete(8) scheme still sitting in
+// physics_config.py), so every frame recorded by the current
+// record_ai_flight.py showed "undefined" in the Action readout and drew
+// no thruster plumes at all. These helpers accept either shape, so old
+// recordings still replay.
+// ---------------------------------------------------------------------
+function actionToArray(a){
+  if (Array.isArray(a)) return a;
+  if (a === null || a === undefined) return [0,0,0];
+  const legacy = {0:[0,0,0],1:[1,0,0],2:[2,0,0],3:[0,1,0],4:[0,2,0],5:[0,0,1],6:[0,0,2],7:[0,0,0]};
+  return legacy[a] ?? [0,0,0];
+}
+function actionLabel(a){
+  const [ax,ay,ar] = actionToArray(a);
+  const parts = [];
+  if (ax === 1) parts.push('+X'); else if (ax === 2) parts.push('−X');
+  if (ay === 1) parts.push('+Y'); else if (ay === 2) parts.push('−Y');
+  if (ar === 1) parts.push('CCW'); else if (ar === 2) parts.push('CW');
+  return parts.length ? parts.join(' + ') : 'NOOP';
+}
+
+// ---------------- Load data (cache-busted) ----------------
+async function loadFlight(){
+  document.getElementById('loadmsg').innerHTML = 'Loading recorded flight…';
+  try{
+    const res = await fetch('/ai_flight_data.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('No flight recorded yet');
+    const payload = await res.json();
+    frames = payload.frames || [];
+    generatedAt = payload.generated_at || null;
+    if (frames.length === 0) throw new Error('Flight file is empty');
+    scriptedMode = false;
+    showPanels();
+    populateMeta(frames.length + ' steps', generatedAt ? new Date(generatedAt*1000).toLocaleString() : 'unknown');
+    render();
+  }catch(err){
+    document.getElementById('loadmsg').innerHTML =
+      `No recorded flight found.<br><span style="font-size:11px;">Run <b>record_ai_flight.py</b> first, then reload.</span>
+       <br><button class="btn" onclick="loadFlight()">Retry</button>`;
+  }
+}
+
+function showPanels(){
+  document.getElementById('loadmsg').style.display = 'none';
+  ['met','telemetry','corridor','rlstatus','playback','log'].forEach(id => document.getElementById(id).style.display = '');
+  document.getElementById('phasebar').style.display = scriptedMode ? '' : 'none';
+}
+
+function populateMeta(lengthText, recordedText){
+  document.getElementById('scrub').max = frames.length - 1;
+  document.getElementById('rl-length').textContent = lengthText;
+  document.getElementById('rl-recorded').textContent = recordedText;
+  const last = frames[frames.length - 1];
+  const outcome = last.outcome || 'unresolved';
+  const outEl = document.getElementById('rl-outcome');
+  outEl.textContent = outcome.toUpperCase();
+  outEl.className = 'pill ' + (outcome === 'docked' ? 'docked' : (outcome === 'truncated' ? 'trunc' : 'fail'));
+  document.getElementById('rl-reward').textContent = (last.cumulative_reward ?? 0).toFixed(1);
+  log(`Loaded ${frames.length} frames. Final outcome: ${outcome.toUpperCase()}.`,
+      outcome === 'docked' ? 'success' : (outcome === 'truncated' ? 'warn' : 'danger'));
+}
+
+const logEl = document.getElementById('log-entries');
+const logBuffer = [];
+function log(msg, level='info'){
+  const t = frames[frameIdx] ? (frames[frameIdx].step*0.1).toFixed(1)+'s' : '0.0s';
+  logBuffer.unshift({t, msg, level});
+  if (logBuffer.length > 60) logBuffer.pop();
+  logEl.innerHTML = logBuffer.map(e => `<div class="log-entry ${e.level}"><span class="t">${e.t}</span>${e.msg}</div>`).join('');
+}
+
+// =====================================================================
+// HIDDEN: type "sai" anywhere to run a scripted (non-RL) docking.
+//
+// This is a hand-written closed-loop guidance law, NOT a trained policy.
+// It runs the same Clohessy-Wiltshire physics, the same MultiDiscrete
+// thruster model, the same fuel burn and the same 8-pulse cooldown as
+// docking_env.py, so the resulting trajectory is a valid flight in the
+// exact same dynamics the RL agent is being trained on. It exists to
+// show what a correct sequential approach looks like, and as a sanity
+// check that the environment is solvable at all.
+//
+// Sequence, strictly in order:
+//   Phase 1 — null angular rate and drive theta to 0 deg (no translation)
+//   Phase 2 — strafe to the Y centreline      (no X movement)
+//   Phase 3 — close X to the -5 m hold point, then park
+//
+// Verified against the Python physics: docks from all six test spawns,
+// including a 170-degree initial misalignment.
+// =====================================================================
+const PHYS = {
+  n: 1.1330e-3, dt: 0.1, pulse: 0.02,
+  dry: 4200.0, fuel0: 1500.0, I: 19475.0,
+  TH: 400.0 * 2,          // translation_thrust_N * 2
+  TAU: 100.0 * 4 * 0.5,   // rotation_thrust_N * 4 * 0.5
+  tBurn: 0.1773 * 2 * 0.02,
+  rBurn: 0.0443 * 4 * 0.02,
+  maxSteps: 6000, capture: 0.5, vCapture: 0.05
+};
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+function guidance(x,y,vx,vy,th,om){
+  let ax=0, ay=0, ar=0;
+
+  // --- Rotation channel: always active (attitude hold). Authority
+  // widens for large errors, otherwise a 170-degree initial
+  // misalignment needs thousands of steps to null out.
+  const lim = Math.abs(th) > 20 ? 1.5 : (Math.abs(th) > 2 ? 0.4 : 0.06);
+  const desOm = clamp(-0.25*th, -lim, lim);
+  const dbOm = Math.abs(th) > 1 ? 0.008 : 0.004;
+  if (om - desOm > dbOm) ar = 1; else if (desOm - om > dbOm) ar = 2;
+
+  const p1 = Math.abs(th) > 0.5 || Math.abs(om) > 0.06;
+
+  // SAFETY OVERRIDE: a phase gate must never be able to block X-braking
+  // while drifting toward the station. One pulse changes velocity by
+  // only 0.0028 m/s, so any velocity deadband can chatter indefinitely;
+  // without this the ship coasts straight through the hold point on the
+  // CW cross-coupling term and dies at the X=0 boundary.
+  const overshoot = x > (HOLD_X + 0.5);
+
+  if (p1 && !overshoot) return [0,0,ar,1];
+
+  const p2 = Math.abs(y - HOLD_Y) > 0.25;
+  const desVy = Math.abs(y) > 1.0 ? clamp(-0.10*y, -0.35, 0.35) : clamp(-0.05*y, -0.05, 0.05);
+
+  if (p2 && !overshoot){
+    if (vy - desVy > 0.004) ay = 2; else if (desVy - vy > 0.004) ay = 1;
+    return [0,ay,ar,2];
+  }
+
+  // Phase 3 — X approach with a glideslope, converging to exactly -5.
+  const ex = HOLD_X - x;
+  let desVx, dbx;
+  if      (Math.abs(ex) < 0.6){ desVx = clamp(0.02*ex, -0.012, 0.012); dbx = 0.0025; }
+  else if (Math.abs(ex) < 1.5){ desVx = clamp(0.05*ex, -0.035, 0.035); dbx = 0.003;  }
+  else if (Math.abs(ex) < 4.0){ desVx = clamp(0.06*ex, -0.090, 0.090); dbx = 0.003;  }
+  else                        { desVx = clamp(0.10*ex, -0.600, 0.600); dbx = 0.004;  }
+  if (vx - desVx > dbx) ax = 2; else if (desVx - vx > dbx) ax = 1;
+  if (vy - desVy > 0.004) ay = 2; else if (desVy - vy > 0.004) ay = 1;
+
+  return [ax,ay,ar, p1 ? 1 : (p2 ? 2 : 3)];
+}
+
+function generateScriptedFlight(){
+  // Spawn at full stage-4 difficulty, randomised like env.reset().
+  let x = -(70 + Math.random()*80);
+  let y = (Math.random()*2 - 1) * 45;
+  let th = (Math.random()*2 - 1) * 15;
+  let om = (Math.random()*2 - 1) * 0.3;
+  let vx = (Math.random()*2 - 1) * 0.05, vy = (Math.random()*2 - 1) * 0.05;
+  let fuel = PHYS.fuel0, cumulative = 0;
+
+  const out = [];
+  let last = [0,0,0], cons = [0,0,0], cd = 0, outcome = null;
+
+  for (let s = 0; s < PHYS.maxSteps; s++){
+    const g = guidance(x,y,vx,vy,th,om);
+    let a = [g[0], g[1], g[2]];
+    const phase = g[3];
+
+    // Self-limit to 7 consecutive pulses per channel so the env's own
+    // 8-pulse cooldown (which zeroes ALL THREE channels for 5 steps,
+    // including the one still braking) never triggers.
+    for (let c = 0; c < 3; c++){
+      if (a[c] !== 0 && a[c] === last[c] && cons[c] >= 7) a[c] = 0;
+    }
+    if (cd > 0){ a = [0,0,0]; cd--; }
+    else if (a[0] || a[1] || a[2]){
+      for (let c = 0; c < 3; c++){
+        if (a[c] !== 0 && a[c] === last[c]) cons[c]++;
+        else if (a[c] !== 0) cons[c] = 1;
+        else cons[c] = 0;
+      }
+      last = a.slice();
+      if (Math.max(...cons) > 8){ cd = 5; cons = [0,0,0]; a = [0,0,0]; }
+    } else { cons = [0,0,0]; last = [0,0,0]; }
+
+    let Fx = 0, Fy = 0, tau = 0, used = 0, fired = false;
+    if (fuel > 0 && (a[0] || a[1] || a[2])){
+      if (a[0] === 1){ Fx =  PHYS.TH; used += PHYS.tBurn; }
+      else if (a[0] === 2){ Fx = -PHYS.TH; used += PHYS.tBurn; }
+      if (a[1] === 1){ Fy =  PHYS.TH; used += PHYS.tBurn; }
+      else if (a[1] === 2){ Fy = -PHYS.TH; used += PHYS.tBurn; }
+      if (a[2] === 1){ tau = -PHYS.TAU; used += PHYS.rBurn; }
+      else if (a[2] === 2){ tau =  PHYS.TAU; used += PHYS.rBurn; }
+      fired = true;
+    }
+    fuel = Math.max(0, fuel - used);
+    const m = PHYS.dry + fuel;
+
+    if (fired){
+      const vxa = vx + (Fx/m)*PHYS.pulse;
+      const vya = vy + (Fy/m)*PHYS.pulse;
+      const oma = om + ((tau/PHYS.I) * 180/Math.PI) * PHYS.pulse;
+      const cdt = PHYS.dt - PHYS.pulse;
+      vx = vxa + (-2*PHYS.n*vya)*cdt;
+      vy = vya + (3*PHYS.n*PHYS.n*y + 2*PHYS.n*vxa)*cdt;
+      om = oma;
+    } else {
+      const nvx = vx + (-2*PHYS.n*vy)*PHYS.dt;
+      const nvy = vy + (3*PHYS.n*PHYS.n*y + 2*PHYS.n*vx)*PHYS.dt;
+      vx = nvx; vy = nvy;
+    }
+    x += vx*PHYS.dt; y += vy*PHYS.dt; th += om*PHYS.dt;
+    th = ((th + 180) % 360 + 360) % 360 - 180;
+
+    const vel = Math.hypot(vx,vy);
+    cumulative += -0.1;
+
+    if (Math.abs(x-HOLD_X) < PHYS.capture && Math.abs(y-HOLD_Y) < PHYS.capture && vel < PHYS.vCapture){
+      outcome = 'docked'; cumulative += 2000;
+    } else if (x > 0.0 || Math.abs(y) > 150){
+      outcome = 'out_of_bounds'; cumulative -= 1000;
+    }
+
+    out.push({ step: s, x, y, vx, vy, theta_deg: th, omega_dps: om,
+               action_taken: a.slice(), reward: 0, cumulative_reward: cumulative,
+               fuel_kg: fuel, outcome, phase });
+    if (outcome) break;
+  }
+  if (!outcome){
+    out[out.length-1].outcome = 'truncated';
+    out[out.length-1].cumulative_reward -= 500;
+  }
+  return out;
+}
+
+function runScriptedDocking(){
+  const egg = document.getElementById('egg');
+  egg.style.display = '';
+  setTimeout(() => { egg.style.display = 'none'; }, 2600);
+
+  frames = generateScriptedFlight();
+  scriptedMode = true;
+  frameIdx = 0; visualAngle = null; lastRenderedIdx = 0; playing = true; speed = 10;
+  document.querySelectorAll('.speed').forEach(b => b.classList.toggle('active', b.dataset.speed === '10'));
+  document.getElementById('btn-play').textContent = '⏸ Pause';
+
+  showPanels();
+  document.getElementById('met-sub').textContent = 'SCRIPTED DOCKING — NO RL MODEL';
+  const modeEl = document.getElementById('rl-mode');
+  modeEl.className = 'pill scripted'; modeEl.textContent = 'SCRIPTED — HARDCODED GUIDANCE';
+  populateMeta(frames.length + ' steps', 'generated just now');
+  log('SAI override accepted. Scripted guidance engaged — no RL policy in the loop.', 'warn');
+  render();
+}
+
+// Keystroke sniffer for the hidden trigger. Ignores typing in inputs so
+// the scrub slider and any future text fields aren't hijacked.
+let typed = '';
+window.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+  if (e.key && e.key.length === 1) {
+    typed = (typed + e.key.toLowerCase()).slice(-8);
+    if (typed.endsWith('sai')) { typed = ''; runScriptedDocking(); }
+  }
+});
+
+// ---------------- Playback controls ----------------
+document.getElementById('btn-play').addEventListener('click', e => {
+  playing = !playing;
+  e.target.textContent = playing ? '⏸ Pause' : '▶ Play';
+});
+document.getElementById('btn-restart').addEventListener('click', () => { frameIdx = 0; visualAngle = null; lastRenderedIdx = 0; render(); });
+document.getElementById('scrub').addEventListener('input', e => { frameIdx = parseInt(e.target.value); playing = false;
+  document.getElementById('btn-play').textContent = '▶ Play'; render(); });
+document.querySelectorAll('.speed').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.speed').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active'); speed = parseFloat(btn.dataset.speed);
+}));
+
+let lastActionLogged = null;
+function updateHUD(){
+  const f = frames[frameIdx];
+  // Range is now measured to the hold point, which is the actual mission
+  // target — measuring to the origin made a perfect park at -5 m read as
+  // "5 m short" on the HUD.
+  const range = Math.hypot(f.x - HOLD_X, f.y - HOLD_Y);
+  const closing = Math.hypot(f.vx, f.vy);
+  const lateral = Math.abs(f.y - HOLD_Y);
+  const misalign = Math.abs(f.theta_deg);
+
+  document.getElementById('val-range').textContent = range.toFixed(2) + ' m';
+  const velEl = document.getElementById('val-vel');
+  velEl.textContent = closing.toFixed(3) + ' m/s'; velEl.className = 'val ' + (closing > MAX_VEL ? 'warn' : '');
+  const latEl = document.getElementById('val-lat');
+  latEl.textContent = lateral.toFixed(3) + ' m'; latEl.className = 'val ' + (lateral > MAX_LAT ? 'warn' : '');
+  const attEl = document.getElementById('val-att');
+  attEl.textContent = f.theta_deg.toFixed(2) + ' deg'; attEl.className = 'val ' + (misalign > MAX_MISALIGN ? 'warn' : '');
+  const fuelEl = document.getElementById('val-fuel');
+  // Fuel starts at 1500 kg, so the old "< 80" danger threshold never lit.
+  fuelEl.textContent = f.fuel_kg.toFixed(1) + ' kg';
+  fuelEl.className = 'val ' + (f.fuel_kg < 150 ? 'danger' : (f.fuel_kg < 400 ? 'warn' : ''));
+  document.getElementById('val-action').textContent = actionLabel(f.action_taken);
+
+  const statusEl = document.getElementById('val-status');
+  if (f.outcome === 'docked'){ statusEl.textContent = 'HOLD POINT REACHED'; statusEl.style.color = 'var(--success)'; }
+  else if (f.outcome === 'soft_crash'){ statusEl.textContent = 'ARRIVED HOT — SOFT CRASH'; statusEl.style.color = 'var(--warn)'; }
+  else if (f.outcome === 'out_of_bounds'){ statusEl.textContent = 'OUT OF BOUNDS'; statusEl.style.color = 'var(--danger)'; }
+  else if (f.outcome === 'truncated'){ statusEl.textContent = 'EPISODE TRUNCATED'; statusEl.style.color = 'var(--warn)'; }
+  else if (closing > MAX_VEL){ statusEl.textContent = 'EXCESS CLOSING RATE'; statusEl.style.color = 'var(--warn)'; }
+  else { statusEl.textContent = 'NOMINAL APPROACH'; statusEl.style.color = 'var(--accent-bright)'; }
+
+  if (scriptedMode && f.phase){
+    for (let p = 1; p <= 3; p++){
+      document.getElementById('ph'+p).classList.toggle('on', f.phase === p);
+    }
+  }
+
+  document.getElementById('met-clock').textContent = fmtMET(f.step * 0.1);
+  document.getElementById('scrub').value = frameIdx;
+  document.getElementById('frame-counter').textContent = `frame ${frameIdx} / ${frames.length - 1}`;
+
+  const lbl = actionLabel(f.action_taken);
+  if (lbl !== lastActionLogged && lbl !== 'NOOP'){
+    log(`${scriptedMode ? 'Scripted' : 'AI'} command: ${lbl}`, 'info');
+    lastActionLogged = lbl;
+  }
+}
+function fmtMET(s){
+  const h=String(Math.floor(s/3600)).padStart(2,'0'), m=String(Math.floor((s%3600)/60)).padStart(2,'0'), sec=String(Math.floor(s%60)).padStart(2,'0');
+  return `${h}:${m}:${sec}`;
+}
+
+// ---------------- Rendering ----------------
+function drawStarfield(){
+  ctx.fillStyle = '#03060a'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let i=0;i<140;i++){
+    const sx=(i*137.3)%canvas.width, sy=(i*269.7+(i*53)%97)%canvas.height, r=(i%7===0)?1.6:0.8;
+    ctx.fillRect(sx,sy,r,r);
+  }
+}
+function drawTruss(x0,y0,x1,y1,seg){
+  ctx.strokeStyle='rgba(150,166,176,0.55)'; ctx.lineWidth=1;
+  const dx=(x1-x0)/seg, dy=(y1-y0)/seg;
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+  for (let i=0;i<seg;i++){
+    const ax=x0+dx*i, ay=y0+dy*i, bx=x0+dx*(i+1), by=y0+dy*(i+1);
+    ctx.beginPath(); ctx.moveTo(ax,ay-5); ctx.lineTo(bx,by+5); ctx.stroke();
+  }
+}
+function drawSolarWing(cx,cy,w,h,vertical){
+  ctx.save(); ctx.translate(cx,cy);
+  const gw=vertical?w:h, gh=vertical?h:w;
+  ctx.fillStyle='#081c34'; ctx.fillRect(-gw/2,-gh/2,gw,gh);
+  ctx.strokeStyle='rgba(70,130,200,0.7)'; ctx.lineWidth=0.8;
+  const cell=7;
+  for (let x=-gw/2;x<gw/2;x+=cell) ctx.strokeRect(x,-gh/2,cell,gh);
+  for (let y=-gh/2;y<gh/2;y+=cell*2){ ctx.beginPath(); ctx.moveTo(-gw/2,y); ctx.lineTo(gw/2,y); ctx.stroke(); }
+  ctx.strokeStyle='rgba(160,180,200,0.5)'; ctx.lineWidth=1.2; ctx.strokeRect(-gw/2,-gh/2,gw,gh);
+  ctx.restore();
+}
+function drawBAS(originX,originY,scale){
+  ctx.save(); ctx.translate(originX,originY);
+  ctx.fillStyle='rgba(62,224,200,0.035)'; ctx.strokeStyle='rgba(62,224,200,0.22)';
+  ctx.setLineDash([5,5]);
+  ctx.beginPath(); ctx.moveTo(0,0);
+  ctx.lineTo(-300*scale,-300*scale*Math.tan(10*Math.PI/180));
+  ctx.lineTo(-300*scale, 300*scale*Math.tan(10*Math.PI/180));
+  ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+
+  const modGrad = ctx.createLinearGradient(0,-3*scale,0,3*scale);
+  modGrad.addColorStop(0,'#4a525c'); modGrad.addColorStop(0.32,'#dfe6ec');
+  modGrad.addColorStop(0.68,'#f6f9fb'); modGrad.addColorStop(1,'#353c44');
+  ctx.fillStyle=modGrad; ctx.strokeStyle='#1c2126'; ctx.lineWidth=1.3;
+  ctx.fillRect(0,-3*scale,38*scale,6*scale); ctx.strokeRect(0,-3*scale,38*scale,6*scale);
+
+  ctx.strokeStyle='rgba(120,140,155,0.7)'; ctx.lineWidth=1;
+  for (let x=3.5;x<37;x+=3.5){ ctx.beginPath(); ctx.moveTo(x*scale,-3*scale); ctx.lineTo(x*scale,3*scale); ctx.stroke(); }
+  [7,19,31].forEach(nx=>{
+    ctx.beginPath(); ctx.fillStyle='#c9d3da'; ctx.arc(nx*scale,0,3.6*scale/2,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#1c2126'; ctx.lineWidth=1; ctx.stroke();
+  });
+
+  drawTruss(12*scale,-3.2*scale,12*scale,-20*scale,4); drawSolarWing(12*scale,-31*scale,15*scale,22*scale,true);
+  drawTruss(12*scale,3.2*scale,12*scale,20*scale,4);   drawSolarWing(12*scale,31*scale,15*scale,22*scale,true);
+  drawTruss(26*scale,-3.2*scale,26*scale,-20*scale,4); drawSolarWing(26*scale,-31*scale,15*scale,22*scale,true);
+  drawTruss(26*scale,3.2*scale,26*scale,20*scale,4);   drawSolarWing(26*scale,31*scale,15*scale,22*scale,true);
+
+  ctx.fillStyle='#c9822f'; ctx.fillRect(-2.2*scale,-2*scale,2.2*scale,4*scale);
+  ctx.strokeStyle='#1c2126'; ctx.lineWidth=1; ctx.strokeRect(-2.2*scale,-2*scale,2.2*scale,4*scale);
+  ctx.fillStyle='rgba(62,224,200,0.9)'; ctx.beginPath(); ctx.arc(-0.4*scale,0,0.5*scale,0,Math.PI*2); ctx.fill();
+
+  // Hold-point marker at X = -5 m — the actual mission target.
+  ctx.save();
+  ctx.strokeStyle='rgba(212,175,55,0.75)'; ctx.lineWidth=1.2; ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.arc(HOLD_X*scale, 0, 0.5*scale, 0, Math.PI*2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(HOLD_X*scale, -1.4*scale); ctx.lineTo(HOLD_X*scale, 1.4*scale); ctx.stroke();
+  ctx.font = `10px 'IBM Plex Mono'`; ctx.fillStyle='rgba(212,175,55,0.85)'; ctx.textAlign='center';
+  ctx.fillText('HOLD −5m', HOLD_X*scale, -2.2*scale);
+  ctx.restore();
+
+  ctx.font = `11px 'IBM Plex Mono'`; ctx.fillStyle='rgba(232,243,241,0.55)'; ctx.textAlign='left';
+  ctx.fillText('BAS', 4*scale, -5*scale);
+  ctx.restore();
+}
+function drawPlume(px,py,rotation,intensity){
+  ctx.save(); ctx.translate(px,py); ctx.rotate(rotation);
+  const g = ctx.createRadialGradient(0,0,1,0,16,20);
+  g.addColorStop(0, `rgba(255,255,255,${0.9*intensity})`);
+  g.addColorStop(0.35, `rgba(150,220,255,${0.55*intensity})`);
+  g.addColorStop(1, 'rgba(80,150,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-5,20); ctx.lineTo(5,20); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawCapsule(x,y,angleDeg,scale,action){
+  ctx.save(); ctx.translate(x,y); ctx.rotate(angleDeg*Math.PI/180);
+
+  // Plumes now read the three channels independently, so simultaneous
+  // multi-axis firing (e.g. +X while rotating) is drawn correctly
+  // instead of only ever showing one thruster.
+  const [pax, pay, par] = actionToArray(action);
+  if (pax === 1) drawPlume(-2.6*scale,0, Math.PI/2, 1);
+  if (pax === 2) drawPlume(1.9*scale,0, -Math.PI/2, 1);
+  if (pay === 1) drawPlume(-1.5*scale,-1.9*scale, Math.PI, 0.85);
+  if (pay === 2) drawPlume(-1.5*scale,1.9*scale, 0, 0.85);
+  if (par === 1){ drawPlume(1.7*scale,-1.1*scale,0,0.6); drawPlume(-2.3*scale,1.8*scale,Math.PI,0.6); }
+  if (par === 2){ drawPlume(1.7*scale,1.1*scale,Math.PI,0.6); drawPlume(-2.3*scale,-1.8*scale,0,0.6); }
+
+  const capGrad = ctx.createLinearGradient(0,-2*scale,0,2*scale);
+  capGrad.addColorStop(0,'#4a535c'); capGrad.addColorStop(0.3,'#edf0f4');
+  capGrad.addColorStop(0.8,'#f7f9fa'); capGrad.addColorStop(1,'#2b3138');
+  ctx.fillStyle=capGrad; ctx.strokeStyle='#14181c'; ctx.lineWidth=1.4;
+  ctx.beginPath();
+  ctx.moveTo(2.5*scale,0); ctx.lineTo(1.8*scale,-1.2*scale); ctx.lineTo(-2.2*scale,-2.0*scale);
+  ctx.lineTo(-2.5*scale,0); ctx.lineTo(-2.2*scale,2.0*scale); ctx.lineTo(1.8*scale,1.2*scale);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle='#d4af37'; ctx.fillRect(2.3*scale,-0.4*scale,0.8*scale,0.8*scale);
+  ctx.strokeStyle='#14181c'; ctx.lineWidth=0.8; ctx.strokeRect(2.3*scale,-0.4*scale,0.8*scale,0.8*scale);
+
+  ctx.fillStyle='#ff9933'; ctx.fillRect(-0.55*scale,-1.85*scale,1.1*scale,0.32*scale);
+  ctx.fillStyle='#f5f5f0';  ctx.fillRect(-0.55*scale,-1.5*scale,1.1*scale,0.32*scale);
+  ctx.fillStyle='#138808';  ctx.fillRect(-0.55*scale,-1.15*scale,1.1*scale,0.32*scale);
+
+  ctx.font = `10px 'IBM Plex Mono'`; ctx.fillStyle='rgba(20,24,28,0.85)'; ctx.textAlign='center';
+  ctx.fillText('SAI', 0, 0.35*scale);
+  ctx.restore();
+}
+function drawVectorsAndLOS(originX,originY,capX,capY,vx,vy){
+  ctx.save();
+  ctx.strokeStyle='rgba(62,224,200,0.35)'; ctx.lineWidth=1; ctx.setLineDash([3,4]);
+  ctx.beginPath(); ctx.moveTo(capX,capY); ctx.lineTo(originX,originY); ctx.stroke(); ctx.setLineDash([]);
+
+  const vScale = 900;
+  const vx2 = capX + vx*vScale, vy2 = capY + vy*vScale;
+  ctx.strokeStyle='#ffb454'; ctx.fillStyle='#ffb454'; ctx.lineWidth=1.6;
+  ctx.beginPath(); ctx.moveTo(capX,capY); ctx.lineTo(vx2,vy2); ctx.stroke();
+  const ang = Math.atan2(vy2-capY, vx2-capX);
+  ctx.beginPath(); ctx.moveTo(vx2,vy2);
+  ctx.lineTo(vx2-8*Math.cos(ang-0.4), vy2-8*Math.sin(ang-0.4));
+  ctx.lineTo(vx2-8*Math.cos(ang+0.4), vy2-8*Math.sin(ang+0.4));
+  ctx.closePath(); ctx.fill();
+  ctx.font = "10px 'IBM Plex Mono'"; ctx.fillStyle='rgba(255,180,84,0.85)'; ctx.textAlign='left';
+  ctx.fillText('Vrel', vx2+6, vy2);
+  ctx.restore();
+}
+
+function render(){
+  if (frames.length === 0) return;
+  const f = frames[frameIdx];
+  drawStarfield();
+
+  // Auto-zoom: keep both the station and the chaser on screen. A fixed
+  // 4.6 px/m scale pushed a -150 m spawn far off the left edge.
+  const spanX = Math.max(30, Math.abs(f.x) + 45);
+  const scale = Math.min(4.6, (canvas.width * 0.62) / spanX);
+
+  const stationOriginX = canvas.width * 0.70, stationOriginY = canvas.height * 0.5;
+  const capX = stationOriginX + f.x*scale, capY = stationOriginY + f.y*scale;
+
+  // Unwrap attitude for rendering only. The physics/RL layer correctly
+  // wraps theta to (-180,180], but drawing that raw value frame-by-frame
+  // makes the sprite visually teleport at the wrap point instead of
+  // continuing to spin smoothly.
+  if (visualAngle === null){
+    visualAngle = f.theta_deg;
+  } else if (frameIdx !== lastRenderedIdx){
+    const dir = frameIdx > lastRenderedIdx ? 1 : -1;
+    let idx = lastRenderedIdx;
+    while (idx !== frameIdx){
+      const nextIdx = idx + dir;
+      const a0 = frames[idx]?.theta_deg ?? f.theta_deg;
+      const a1 = frames[nextIdx]?.theta_deg ?? f.theta_deg;
+      let delta = a1 - a0;
+      delta = ((delta + 180) % 360 + 360) % 360 - 180; // shortest-path wrap
+      visualAngle += dir > 0 ? delta : -delta;
+      idx = nextIdx;
+    }
+  }
+  lastRenderedIdx = frameIdx;
+
+  drawBAS(stationOriginX, stationOriginY, scale);
+  drawVectorsAndLOS(stationOriginX, stationOriginY, capX, capY, f.vx, f.vy);
+  drawCapsule(capX, capY, visualAngle, scale, f.action_taken);
+  updateHUD();
+}
+
+function loop(now){
+  const dt = (now - lastT)/1000; lastT = now;
+  if (playing && frames.length > 0){
+    acc += dt * speed;
+    const frameStep = 0.1; // env dt
+    while (acc >= frameStep){
+      acc -= frameStep;
+      if (frameIdx < frames.length - 1) frameIdx++;
+      else { playing = false; document.getElementById('btn-play').textContent = '▶ Play'; break; }
+    }
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+
+// Gated: launched by enterProximityOps() once the transfer arc completes,
+// not on page load, so the docking log doesn't fire before the mission
+// narrative (launch/ascent/transfer) has played out.
+window.__startDockingPhase = function(){ loadFlight(); requestAnimationFrame(loop); };
+
+</script>
+
+<script type="module">
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+  // ---------------------------------------------------------------------
+  // PHASE 1 — Launch, ascent, transfer, rendezvous.
+  //
+  // This is a deliberately simple, ILLUSTRATIVE trajectory: parametric
+  // curves (lerp/slerp/Bezier) chosen to look and narrate correctly
+  // (ascent, coast, transfer burn, rendezvous), not a numerically
+  // propagated orbit. Real launch-to-rendezvous GMAT propagation is a
+  // separate integration this file does NOT attempt — /api/trajectory on
+  // the Flask side is equally illustrative (same math as before). The
+  // moment proximity ops begins, everything becomes the exact,
+  // already-verified Clohessy-Wiltshire physics from docking_env.py —
+  // that handoff is the real content of this page.
+  // ---------------------------------------------------------------------
+
+  const EARTH_R = 6371;               // km, matches physics_config.py orbit.earth_radius_m/1000
+  const LEO_ALT = 400;                // km, matches physics_config.py orbit.altitude_km
+  const BAS_ALT = 400;                // BAS shares the same LEO shell
+
+  const canvas = document.getElementById('launchCanvas');
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x02040a);
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100000);
+  camera.position.set(9000, 6500, 12000);
+
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.05;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.position.set(10000, 5000, 10000);
+  scene.add(sun);
+
+  // --- Earth ---
+  const earthGeo = new THREE.SphereGeometry(EARTH_R, 64, 64);
+  const earthTex = new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg');
+  const earth = new THREE.Mesh(earthGeo, new THREE.MeshPhongMaterial({ map: earthTex }));
+  earth.rotation.y = -Math.PI/2;
+  scene.add(earth);
+
+  function latLonToVector3(lat, lon, radius){
+    const phi = (90-lat)*(Math.PI/180), theta = (lon+180)*(Math.PI/180);
+    return new THREE.Vector3(-(radius*Math.sin(phi)*Math.cos(theta)), radius*Math.cos(phi), radius*Math.sin(phi)*Math.sin(theta));
+  }
+
+  // Sriharikota launch site
+  const padPos = latLonToVector3(13.72, 80.23, EARTH_R + 1);
+  const padGroup = new THREE.Group();
+  const pad = new THREE.Mesh(new THREE.SphereGeometry(60,16,16), new THREE.MeshBasicMaterial({color:0xffaa00}));
+  pad.position.copy(padPos);
+  padGroup.add(pad); padGroup.rotation.y = -Math.PI/2;
+  scene.add(padGroup);
+
+  // BAS parking orbit (visual ring) + BAS station marker, orbiting slowly
+  function orbitRing(radiusKm, colorHex, inclinationDeg){
+    const pts = [];
+    for (let i=0;i<=128;i++){
+      const a = (i/128)*Math.PI*2;
+      pts.push(new THREE.Vector3(radiusKm*Math.cos(a), radiusKm*Math.sin(a)*Math.sin(inclinationDeg*Math.PI/180), radiusKm*Math.sin(a)*Math.cos(inclinationDeg*Math.PI/180)));
+    }
+    return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color:colorHex, transparent:true, opacity:0.55}));
+  }
+  const basOrbit = orbitRing(EARTH_R+BAS_ALT, 0x3ee0c8, 51.6);
+  scene.add(basOrbit);
+
+  const basMarker = new THREE.Mesh(new THREE.SphereGeometry(50,16,16), new THREE.MeshBasicMaterial({color:0x3ee0c8}));
+  const chaserMarker = new THREE.Mesh(new THREE.ConeGeometry(40,140,8), new THREE.MeshBasicMaterial({color:0xff5f56}));
+  scene.add(basMarker, chaserMarker);
+
+  function posOnOrbit(radiusKm, angle, inclinationDeg){
+    return new THREE.Vector3(radiusKm*Math.cos(angle), radiusKm*Math.sin(angle)*Math.sin(inclinationDeg*Math.PI/180), radiusKm*Math.sin(angle)*Math.cos(inclinationDeg*Math.PI/180));
+  }
+
+  let basAngle = 0.0;
+  chaserMarker.visible = false;
+  chaserMarker.position.copy(padPos.clone().applyAxisAngle(new THREE.Vector3(0,1,0), -Math.PI/2));
+
+  // ---------------- Timeline / narration ----------------
+  const steps = ['prelaunch','ascent','insertion','transfer','rendezvous','proximity'];
+  function setStep(name){
+    steps.forEach(s => {
+      const el = document.querySelector(`.tl-step[data-step="${s}"]`);
+      el.classList.remove('active');
+      if (steps.indexOf(s) < steps.indexOf(name)) el.classList.add('done'); else el.classList.remove('done');
+      if (s === name) el.classList.add('active');
+    });
+  }
+  setStep('prelaunch');
+
+  function setPhaseLabel(t){ document.getElementById('lt-phase').textContent = t; }
+  function setAlt(km){ document.getElementById('lt-alt').textContent = km.toFixed(0) + ' km'; }
+  function setRange(km){ document.getElementById('lt-range').textContent = (km >= 1 ? km.toFixed(0)+' km' : (km*1000).toFixed(0)+' m'); }
+  function setMET(sec){
+    const h=String(Math.floor(sec/3600)).padStart(2,'0'), m=String(Math.floor((sec%3600)/60)).padStart(2,'0'), s=String(Math.floor(sec%60)).padStart(2,'0');
+    document.getElementById('lt-met').textContent = `T+${h}:${m}:${s}`;
+  }
+
+  // ---------------- Animated sequence state machine ----------------
+  let seqStart = null, seqPhase = 'idle', metAtLaunch = 0;
+  const DUR = { ascent: 6.0, insertion: 2.0, transfer: 9.0, rendezvous: 2.5 }; // seconds, illustrative pacing
+
+  function lerpV(a,b,t){ return a.clone().lerp(b,t); }
+  function easeInOut(t){ return t<0.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2; }
+
+  function beginLaunchSequence(){
+    if (seqPhase !== 'idle') return;
+    window.log('T-0: LIFTOFF — ascent underway (illustrative trajectory, not GMAT-propagated)', 'warn');
+    seqPhase = 'ascent'; seqStart = performance.now();
+    setStep('ascent'); setPhaseLabel('ASCENT');
+    document.getElementById('btn-launch').disabled = true;
+  }
+  document.getElementById('btn-launch').addEventListener('click', beginLaunchSequence);
+  document.getElementById('btn-skip').addEventListener('click', () => enterProximityOps());
+
+  const btnProximity = document.getElementById('btn-proximity');
+  btnProximity.addEventListener('click', () => enterProximityOps());
+
+  let loggedMaxQ=false, loggedMECO=false, loggedInsertion=false, loggedBurn=false, loggedBurnDone=false, loggedRendezvous=false;
+
+  function updateSequence(elapsedTotal){
+    if (seqPhase === 'idle') { chaserMarker.visible = false; return; }
+    chaserMarker.visible = true;
+    const t = (performance.now() - seqStart) / 1000;
+
+    if (seqPhase === 'ascent'){
+      const f = Math.min(1, t / DUR.ascent);
+      if (!loggedMaxQ && f > 0.35){ window.log('MAX-Q', 'info'); loggedMaxQ = true; }
+      if (!loggedMECO && f > 0.75){ window.log('MECO — stage separation', 'info'); loggedMECO = true; }
+      const insertionPoint = posOnOrbit(EARTH_R+LEO_ALT, -Math.PI/2 + 0.25, 51.6);
+      const surfacePoint = padPos.clone().applyAxisAngle(new THREE.Vector3(0,1,0), -Math.PI/2);
+      const mid = lerpV(surfacePoint, insertionPoint, 0.5).multiplyScalar(1.15);
+      const e = easeInOut(f);
+      const p1 = lerpV(surfacePoint, mid, e), p2 = lerpV(mid, insertionPoint, e);
+      chaserMarker.position.copy(lerpV(p1, p2, e));
+      setAlt(chaserMarker.position.length() - EARTH_R);
+      if (f >= 1){
+        seqPhase = 'insertion'; seqStart = performance.now();
+        setStep('insertion'); setPhaseLabel('LEO INSERTION');
+      }
+    } else if (seqPhase === 'insertion'){
+      const f = Math.min(1, t / DUR.insertion);
+      if (!loggedInsertion){ window.log('Orbit insertion — LEO parking orbit achieved, alt ~400 km', 'info'); loggedInsertion = true; }
+      setAlt(LEO_ALT);
+      if (f >= 1){
+        window.log('Coasting to transfer window...', 'info');
+        seqPhase = 'transfer'; seqStart = performance.now();
+        setStep('transfer'); setPhaseLabel('TRANSFER BURN');
+      }
+    } else if (seqPhase === 'transfer'){
+      const f = Math.min(1, t / DUR.transfer);
+      if (!loggedBurn && f > 0.05){ window.log('Transfer burn ignition', 'warn'); loggedBurn = true; }
+      if (!loggedBurnDone && f > 0.5){ window.log('Transfer burn complete — coasting to BAS orbital plane', 'info'); loggedBurnDone = true; }
+      const start = posOnOrbit(EARTH_R+LEO_ALT, -Math.PI/2 + 0.25, 51.6);
+      basAngle += 0.15 * (1/60);
+      const target = posOnOrbit(EARTH_R+BAS_ALT, basAngle + 0.4*(1-f), 51.6);
+      const e = easeInOut(f);
+      const bulge = lerpV(start, target, 0.5).multiplyScalar(1.35);
+      const p1 = lerpV(start, bulge, e), p2 = lerpV(bulge, target, e);
+      chaserMarker.position.copy(lerpV(p1, p2, e));
+      setAlt(chaserMarker.position.length() - EARTH_R);
+      const rangeKm = chaserMarker.position.distanceTo(basMarker.position);
+      setRange(rangeKm);
+      if (f >= 1){
+        seqPhase = 'rendezvous'; seqStart = performance.now();
+        setStep('rendezvous'); setPhaseLabel('RENDEZVOUS');
+      }
+    } else if (seqPhase === 'rendezvous'){
+      const f = Math.min(1, t / DUR.rendezvous);
+      chaserMarker.position.copy(lerpV(chaserMarker.position, basMarker.position, 0.06));
+      const rangeKm = chaserMarker.position.distanceTo(basMarker.position);
+      setRange(rangeKm);
+      if (!loggedRendezvous && rangeKm < 2.0){
+        window.log('Range under 2,000 m — proximity operations available', 'success');
+        loggedRendezvous = true;
+        btnProximity.disabled = false;
+        setStep('proximity'); setPhaseLabel('HOLDING — AWAITING PROXIMITY OPS');
+      }
+      if (f >= 1 && !btnProximity.disabled === false){ /* hold here until user/skip triggers handoff */ }
+    }
+  }
+
+  let missionClock0 = performance.now();
+  function animate(now){
+    requestAnimationFrame(animate);
+    basAngle += 0.0006;
+    basMarker.position.copy(posOnOrbit(EARTH_R+BAS_ALT, basAngle, 51.6));
+    updateSequence(now);
+    setMET((performance.now() - missionClock0)/1000);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(animate);
+
+  // ---------------- Phase transition: 3D mission view -> 2D docking view ----------------
+  let transitioned = false;
+  window.enterProximityOps = function(){
+    if (transitioned) return;
+    transitioned = true;
+    window.log('HANDOFF: RCS proximity guidance online — CW relative-motion frame engaged', 'success');
+    setStep('proximity'); setPhaseLabel('PROXIMITY OPS');
+    document.getElementById('phase1').classList.add('out');
+    const p3 = document.getElementById('phase3wrapper');
+    p3.style.display = '';
+    requestAnimationFrame(() => p3.classList.add('in'));
+    setTimeout(() => {
+      document.getElementById('phase1').style.display = 'none';
+      if (window.__startDockingPhase) window.__startDockingPhase();
+    }, 650);
+  };
+  function enterProximityOps(){ window.enterProximityOps(); }
+
+  window.log('Mission control online — BAS rendezvous profile loaded.', 'info');
+</script>
+
+</body>
+</html>
